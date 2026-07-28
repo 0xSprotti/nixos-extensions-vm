@@ -250,10 +250,12 @@ kbd_file_layout() {
 CUR_KBD="$(kbd_file_layout)"
 KBD_LAYOUT="${OPT_KBD:-${CUR_KBD:-$DEF_KBD_LAYOUT}}"
 
-# Umschalttaste nur bei MEHREREN Gruppen. grp:alt_shift_toggle ist bewusst dieselbe
-# Kombination wie auf dem Host (modules/desktop.nix): SPICE reicht Scancodes durch, also
-# schalten Host und Gast gemeinsam um — genau das ist beim Tippen auf einer physisch
-# anderen Tastatur gewollt. Bei EINER Gruppe bleibt options leer (nichts umzuschalten).
+# Umschalttaste nur bei MEHREREN Gruppen. grp:alt_shift_toggle ist dieselbe Kombination
+# wie auf dem Host (modules/desktop.nix) — das ist reine Gewohnheits-Konsistenz, KEINE
+# technische Notwendigkeit: virt-viewer grabbt die Tastatur, der Host verarbeitet sein
+# eigenes Toggle also gar nicht mit (verifiziert 2026-07-28). Es schaltet ausschliesslich
+# der Gast um; Host- und Gast-Set duerfen sich frei unterscheiden.
+# Bei EINER Gruppe bleibt options leer (nichts umzuschalten).
 case "$KBD_LAYOUT" in
   *,*) KBD_OPTIONS="grp:alt_shift_toggle" ;;
   *)   KBD_OPTIONS="" ;;
@@ -288,15 +290,19 @@ else
   info "Tastatur: ${KBD_LAYOUT} (Produkt-Default; abweichend setzen mit --kbd, z.B. --kbd de,gb)."
 fi
 
-# Flake-Output vorhanden? (auf einem frischen Host evtl. noch nicht angelegt)
-if ! grep -qF 'browser-vm' flake.nix; then
-  warn "In flake.nix fehlt der 'browser-vm'-Output. Ergaenze unter outputs … nixosConfigurations:"
-  cat <<'SNIP'
-      nixosConfigurations.browser-vm = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [ ./hosts/browser-vm/configuration.nix ];
-      };
-SNIP
+# Gast-Config vorhanden UND getrackt? (Voraussetzung der Flake-Auto-Discovery, Baustein A)
+# Frueher stand hier ein grep auf 'browser-vm' in flake.nix. Seit der Auto-Discovery
+# enthaelt flake.nix keine Host-Namen mehr — der Check warnte deshalb bei JEDEM Lauf
+# ins Leere (False Positive). Geprueft wird jetzt, was wirklich zaehlt:
+#   1. hosts/<vm>/configuration.nix existiert  -> sonst findet die Discovery nichts
+#   2. sie ist GETRACKT                        -> sonst baut Nix still die letzte
+#      committete Fassung, ohne Fehlermeldung (die klassische Falle dieses Repos)
+if [ ! -f "hosts/${VM_NAME}/configuration.nix" ]; then
+  die "hosts/${VM_NAME}/configuration.nix fehlt — die Flake-Auto-Discovery findet '${VM_NAME}' nicht."
+fi
+if ! git ls-files --error-unmatch "hosts/${VM_NAME}/configuration.nix" >/dev/null 2>&1; then
+  warn "hosts/${VM_NAME}/configuration.nix ist NICHT getrackt — der Flake-Build ignoriert sie STILL."
+  warn "Vorher:  git add hosts/${VM_NAME}/configuration.nix"
 fi
 
 # ---------------------------------------------------------------------------

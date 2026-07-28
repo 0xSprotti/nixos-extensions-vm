@@ -149,10 +149,11 @@ in
   # Ohne diese Zeilen greift der nixpkgs-Default "us" — auf einer de-Tastatur waeren dann
   # y/z vertauscht, die Umlaute weg und '-'/'/' verschoben. Fuer eine VM, in der
   # Passphrasen und Wallet-Adressen getippt werden, ist das ein Fehlerpfad, kein Komfort.
-  # Bei MEHREREN Gruppen (z.B. "de,gb") setzt deploy-browser-vm.sh grp:alt_shift_toggle —
-  # dieselbe Kombination wie auf dem Host (modules/desktop.nix). SPICE reicht Scancodes
-  # durch, also schalten Host und Gast gemeinsam um; genau das ist beim Tippen auf einer
-  # physisch anderen Tastatur gewollt.
+  # Bei MEHREREN Gruppen (z.B. "de,gb") setzt deploy-browser-vm.sh grp:alt_shift_toggle.
+  # BEFUND (verifiziert 2026-07-28): virt-viewer grabbt die Tastatur — der Host verarbeitet
+  # sein eigenes grp:alt_shift_toggle waehrend der VM-Sitzung NICHT mit. Es schaltet
+  # ausschliesslich der Gast um, das Host-Layout bleibt stehen. Host- und Gast-Set sind
+  # damit voneinander unabhaengig; sie muessen NICHT uebereinstimmen.
   # ACHTUNG: die aktive Gruppe ist reiner X-Laufzeitzustand. Jede Session startet auf der
   # ERSTEN Gruppe, und Openbox hat keinen Layout-Indikator — Umschalten erfolgt blind.
   services.xserver.xkb = {

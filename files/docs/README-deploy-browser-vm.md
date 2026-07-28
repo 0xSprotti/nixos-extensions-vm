@@ -170,22 +170,24 @@ ist die Marker-Formel bitgleich zur alten — bestehende Marker bleiben gültig.
 ### Mehrere Layouts und die Umschaltung
 
 Bei kommagetrennten Werten (`--kbd de,gb`) setzt das Skript automatisch
-`grp:alt_shift_toggle` — **dieselbe** Kombination wie der Host in `modules/desktop.nix`. Weil
-SPICE Scancodes durchreicht, schalten Host und Gast dabei **gemeinsam** um: wer auf einer
-physisch englischen Tastatur tippt und am Host auf `gb` wechselt, hat den Wechsel auch in der
-VM. Bei einem Einzellayout bleibt `options` leer.
+`grp:alt_shift_toggle` — dieselbe Kombination wie der Host in `modules/desktop.nix`. Das ist
+Gewohnheits-Konsistenz, keine technische Notwendigkeit.
 
-Damit das aufgeht, müssen **Host und Gast dasselbe Set in derselben Reihenfolge** haben. Der
-Host steht auf `de,gb` — ein Gast mit `de,us` liefe dagegen.
+**Verifiziert am 2026-07-28:** Es schaltet **ausschließlich der Gast** um. virt-viewer greift
+die Tastatur ab, der Host verarbeitet sein eigenes `grp:alt_shift_toggle` während der Sitzung
+also gar nicht — das Host-Layout bleibt stehen, wo es stand. Praktisch heißt das: kein
+Nebeneffekt beim Verlassen der VM, und **Host- und Gast-Set müssen nicht übereinstimmen**. Ein
+Host auf `de,gb` und ein Gast auf `de,us` vertragen sich problemlos; maßgeblich für die Wahl
+ist allein, was auf deiner physischen Tastatur steht.
 
 ### Zwei Grenzen, die bleiben
 
 - **Kein Layout-Indikator.** Openbox hat keine Kontrollleiste; welche Gruppe aktiv ist, sieht
   man nirgends. Der Test ist blind: `y` tippen und schauen, ob ein `z` erscheint.
 - **Jede Session startet auf der ersten Gruppe.** Die aktive Gruppe ist X-Laufzeitzustand und
-  fällt mit der Wegwerf-Session weg. Wer am Host zuletzt auf `gb` stand, öffnet die VM auf `de`
-  — ein Alt+Shift korrigiert es. Das ist der Preis der Wegwerf-Semantik und nicht lösbar, ohne
-  Zustand in die VM zu tragen.
+  fällt mit der Wegwerf-Session weg. Wer in der letzten Sitzung auf `gb` umgeschaltet hatte,
+  öffnet die nächste wieder auf `de` — ein Alt+Shift stellt es her. Das ist der Preis der
+  Wegwerf-Semantik und nicht lösbar, ohne Zustand in die VM zu tragen.
 
 ### Fehlermeldungen
 

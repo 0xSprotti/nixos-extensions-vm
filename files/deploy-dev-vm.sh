@@ -255,27 +255,20 @@ else
   ok "Domain-XML erzeugt: ${DOMAIN_XML_REL}."
 fi
 
-# Vorbedingung der Auto-Discovery (Baustein A) pruefen.
-#
-# FRUEHER stand hier ein 'grep -qF dev-vm flake.nix' plus ein Vorschlag, einen
-# nixosConfigurations-Block von Hand zu ergaenzen. Beides ist seit Baustein A
-# falsch: flake.nix nennt KEINEN Host mehr namentlich (readDir ueber hosts/), der
-# grep haette also bei jedem Lauf Fehlalarm geschlagen — und ein manuell
-# ergaenzter nixosConfigurations.${VM_NAME}-Block kollidiert heute mit lib.genAttrs.
-#
-# Geprueft wird deshalb, was die Auto-Discovery TATSAECHLICH braucht:
-#   1. hosts/<VM_NAME>/configuration.nix existiert  -> sonst gibt es den Output nicht
-#   2. git kennt die Datei                          -> sonst ist sie fuer die
-#      Flake-Evaluation unsichtbar. Das ist der gefaehrlichere Fall: existiert eine
-#      AELTERE getrackte Fassung, baut Nix stillschweigend die — der Deploy meldet
-#      Erfolg, im Image steckt aber der alte Stand.
-# Beides ist harte Vorbedingung (der Build scheitert sonst ohnehin) -> die, nicht warn.
-# Die Pruefung laeuft bewusst VOR dem ersten sudo-Aufruf (Abschnitt 1).
-GUEST_CFG="hosts/${VM_NAME}/configuration.nix"
-[ -f "$GUEST_CFG" ] \
-  || die "${GUEST_CFG} fehlt — die Auto-Discovery findet die VM nur mit dieser Datei (s. flake.nix, Konvention Baustein A)."
-git ls-files --error-unmatch "$GUEST_CFG" >/dev/null 2>&1 \
-  || die "${GUEST_CFG} ist nicht von git getrackt — 'git add -A' ausfuehren. Ungetrackte Dateien sind fuer die Flake-Evaluation unsichtbar."
+# Gast-Config vorhanden UND getrackt? (Voraussetzung der Flake-Auto-Discovery, Baustein A)
+# Frueher stand hier ein grep auf 'dev-vm' in flake.nix. Seit der Auto-Discovery
+# enthaelt flake.nix keine Host-Namen mehr — der Check warnte deshalb bei JEDEM Lauf
+# ins Leere (False Positive). Geprueft wird jetzt, was wirklich zaehlt:
+#   1. hosts/<vm>/configuration.nix existiert  -> sonst findet die Discovery nichts
+#   2. sie ist GETRACKT                        -> sonst baut Nix still die letzte
+#      committete Fassung, ohne Fehlermeldung (die klassische Falle dieses Repos)
+if [ ! -f "hosts/${VM_NAME}/configuration.nix" ]; then
+  die "hosts/${VM_NAME}/configuration.nix fehlt — die Flake-Auto-Discovery findet '${VM_NAME}' nicht."
+fi
+if ! git ls-files --error-unmatch "hosts/${VM_NAME}/configuration.nix" >/dev/null 2>&1; then
+  warn "hosts/${VM_NAME}/configuration.nix ist NICHT getrackt — der Flake-Build ignoriert sie STILL."
+  warn "Vorher:  git add hosts/${VM_NAME}/configuration.nix"
+fi
 
 # ---------------------------------------------------------------------------
 # 1) Eigenes dev-VM-Netz (NAT) mit fester DHCP-Reservierung sicherstellen
