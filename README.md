@@ -74,7 +74,7 @@ Freigabe für unfreie Pakete, die der Browser in der browser-VM braucht.
 
 Apache License 2.0 — siehe [LICENSE](LICENSE).
 
-Copyright 2026 Scaly Systems
+Copyright 2026 scaly.systems
 
 ---
 
