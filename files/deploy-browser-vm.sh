@@ -10,9 +10,13 @@
 #   Volume, das man vergroessern koennte.
 #
 # Aufruf (irgendwo im Repo):
-#   bash deploy-browser-vm.sh [--cpu N] [--ram MiB] [--autostart] [--no-start] [--dry-run]
+#   bash deploy-browser-vm.sh [--cpu N] [--ram MiB] [--kbd LAYOUT] [--autostart] [--no-start] [--dry-run]
 #     --cpu N      vCPUs              (Default 4;    ohne Angabe gilt der zuletzt genutzte Wert)
 #     --ram MiB    Arbeitsspeicher    (Default 6144; dito — gesetzte Werte "kleben")
+#     --kbd LAYOUT xkb-Layout des Gasts (Default "de"; kommagetrennt fuer mehrere, z.B.
+#                  "de,gb" -> Umschalten per Alt+Shift, wie auf dem Host). Traeger ist
+#                  hosts/browser-vm/keyboard.nix — gesetzte Werte "kleben" wie cpu/ram.
+#                  Hinweis: "en" gibt es nicht; gemeint ist "us" (US) oder "gb" (UK).
 #     --autostart  VM beim Host-Boot automatisch starten (Default: AUS -> on-demand ueber das Icon)
 #     --no-start   VM nach dem Deploy NICHT starten (Update-Pfad: update-all.sh, Abschnitt 3 —
 #                  die VM war aus und bleibt aus; der naechste Icon-Start bootet das frische Image)
@@ -36,7 +40,7 @@ fi
 # ---------------------------------------------------------------------------
 # Flags  (CPU/RAM optional; ohne Angabe gilt der zuletzt genutzte Wert -> "kleben")
 # ---------------------------------------------------------------------------
-DRY_RUN=0; OPT_CPU=""; OPT_RAM=""; OPT_AUTOSTART=0; OPT_NOSTART=0
+DRY_RUN=0; OPT_CPU=""; OPT_RAM=""; OPT_KBD=""; OPT_AUTOSTART=0; OPT_NOSTART=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)   DRY_RUN=1 ;;
@@ -45,8 +49,10 @@ while [ $# -gt 0 ]; do
     --cpu=*)     OPT_CPU="${1#*=}" ;;
     --ram)       OPT_RAM="${2:?--ram braucht einen Wert (MiB)}"; shift ;;
     --ram=*)     OPT_RAM="${1#*=}" ;;
+    --kbd)       OPT_KBD="${2:?--kbd braucht ein xkb-Layout, z.B. de oder de,gb}"; shift ;;
+    --kbd=*)     OPT_KBD="${1#*=}" ;;
     --autostart) OPT_AUTOSTART=1 ;;
-    -h|--help)   sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,24p' "$0"; exit 0 ;;
     *) printf 'Unbekanntes Argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -60,10 +66,15 @@ FLAKE_ATTR=".#${VM_NAME}"                 # nixosConfigurations.browser-vm
 IMG_DIR="/var/lib/libvirt/images"
 ROOT_IMG="${IMG_DIR}/${VM_NAME}.qcow2"
 DOMAIN_XML_REL="hosts/${VM_NAME}/browser-vm.xml"
+# Traeger einer vom Produkt-Default abweichenden Tastatur. Wird von --kbd geschrieben und
+# von der Gast-Config gelesen (builtins.pathExists). KEIN Payload — Geraetezustand, wie
+# ssh-debug.pub. Fehlt die Datei, gilt DEF_KBD_LAYOUT (identisch in der Gast-Config).
+KBD_FILE_REL="hosts/${VM_NAME}/keyboard.nix"
 # Stand-Marker neben dem Image: "dieses Root-Image entspricht Repo-Stand X".
 # update-all.sh (Abschnitt 3) vergleicht ihn und deployt nur bei Abweichung.
-# Formel (cat flake.lock + Gast-Config | sha256sum) ist GESPIEGELT in
-# deploy-dev-vm.sh und update-all.sh — Aenderungen an allen drei Stellen!
+# Formel: cat flake.lock + Gast-Config + (falls vorhanden) keyboard.nix | sha256sum.
+# GESPIEGELT in update-all.sh — Aenderungen an BEIDEN Stellen! (deploy-dev-vm.sh nutzt
+# dieselbe Formel; die dev-VM hat keine keyboard.nix, dort faellt der Zusatz weg.)
 MARKER_FILE="${IMG_DIR}/${VM_NAME}.flake-rev"
 VM_NET="browser-vm-net"                   # eigenes host-lokales NAT-Netz (parallel zum dev-vm-Netz; 'default' ist Policy-bedingt entfernt, s. 1b)
 # Bridge-Name — MUSS mit modules/browser-vm-net.nix uebereinstimmen (dort host.browserVm.bridge).
@@ -82,6 +93,9 @@ VM_IP="${NET_PREFIX}.2"                     # feste browser-VM-IP (per Reservier
 # 6144 MiB: Brave + Video-Decode (Software) + tmpfs-Home teilen sich den RAM.
 DEF_VCPUS=4
 DEF_RAM_MB=6144
+# Produkt-Default der Tastatur. MUSS mit dem Fallback in hosts/browser-vm/configuration.nix
+# (let-Block, kbdLayout) uebereinstimmen — dort gilt er, wenn keine keyboard.nix existiert.
+DEF_KBD_LAYOUT="de"
 
 # ---------------------------------------------------------------------------
 # Ausgabe-Helfer
@@ -126,6 +140,23 @@ fi
 # ---------------------------------------------------------------------------
 [ -z "$OPT_CPU" ] || printf '%s' "$OPT_CPU" | grep -qE '^[0-9]+$' || die "--cpu erwartet eine Zahl, nicht '$OPT_CPU'."
 [ -z "$OPT_RAM" ] || printf '%s' "$OPT_RAM" | grep -qE '^[0-9]+$' || die "--ram erwartet MiB als Zahl, nicht '$OPT_RAM'."
+# --kbd HIER mitpruefen, nicht erst in 0b: ab der naechsten Zeile wird geschrieben
+# (browser-vm.xml + git add). Ein Abbruch spaeter wuerde sonst z.B. ein '--cpu 8' schon
+# in der XML hinterlassen, wo es beim naechsten Lauf klebt — obwohl der Lauf scheiterte.
+if [ -n "$OPT_KBD" ]; then
+  printf '%s' "$OPT_KBD" | grep -qE '^[a-z]{2,6}(,[a-z]{2,6})*$' \
+    || die "--kbd erwartet kommagetrennte xkb-Layouts (z.B. 'de', 'de,gb', 'us') — nicht '$OPT_KBD'."
+  # Haeufige Verwechslungen LAUT abfangen statt still umzudeuten: 'en'/'uk' sind keine
+  # xkb-Layouts. Der Format-Check oben laesst sie durch — X11 wuerde sie spaeter
+  # kommentarlos auf 'us' zurueckfallen lassen, und der Fehler faellt erst in der VM auf.
+  while IFS= read -r part; do
+    case "$part" in
+      en|eng) die "'${part}' ist kein xkb-Layout. Gemeint ist 'us' (US-QWERTY, @ auf Shift+2) oder 'gb' (UK-QWERTY, @ auf Shift+')." ;;
+      uk)     die "'uk' ist kein xkb-Layout — das britische Layout heisst 'gb'." ;;
+      ger|deu) die "'${part}' ist kein xkb-Layout — das deutsche heisst 'de'." ;;
+    esac
+  done < <(printf '%s\n' "$OPT_KBD" | tr ',' '\n')
+fi
 
 # "Kleben": aktuelle Werte aus vorhandener browser-vm.xml lesen (gesetzt bleibt gesetzt, Flag schlaegt sie).
 xml_get() { [ -f "$DOMAIN_XML_REL" ] && sed -n "$1" "$DOMAIN_XML_REL" | head -n1 || true; }
@@ -199,28 +230,74 @@ else
   ok "Domain-XML erzeugt: ${DOMAIN_XML_REL}."
 fi
 
-# Vorbedingung der Auto-Discovery (Baustein A) pruefen.
-#
-# FRUEHER stand hier ein 'grep -qF browser-vm flake.nix' plus ein Vorschlag, einen
-# nixosConfigurations-Block von Hand zu ergaenzen. Beides ist seit Baustein A
-# falsch: flake.nix nennt KEINEN Host mehr namentlich (readDir ueber hosts/), der
-# grep haette also bei jedem Lauf Fehlalarm geschlagen — und ein manuell
-# ergaenzter nixosConfigurations.${VM_NAME}-Block kollidiert heute mit lib.genAttrs.
-#
-# Geprueft wird deshalb, was die Auto-Discovery TATSAECHLICH braucht:
-#   1. hosts/<VM_NAME>/configuration.nix existiert  -> sonst gibt es den Output nicht
-#   2. git kennt die Datei                          -> sonst ist sie fuer die
-#      Flake-Evaluation unsichtbar. Das ist der gefaehrlichere Fall: existiert eine
-#      AELTERE getrackte Fassung, baut Nix stillschweigend die — der Deploy meldet
-#      Erfolg, im Image steckt aber der alte Stand. Bei einer Zero-Trust-VM ist das
-#      besonders unangenehm: eine gerade erst gepinnte Rabby-Version waere nicht drin.
-# Beides ist harte Vorbedingung (der Build scheitert sonst ohnehin) -> die, nicht warn.
-# Die Pruefung laeuft bewusst VOR dem ersten sudo-Aufruf (Abschnitt 1).
-GUEST_CFG="hosts/${VM_NAME}/configuration.nix"
-[ -f "$GUEST_CFG" ] \
-  || die "${GUEST_CFG} fehlt — die Auto-Discovery findet die VM nur mit dieser Datei (s. flake.nix, Konvention Baustein A)."
-git ls-files --error-unmatch "$GUEST_CFG" >/dev/null 2>&1 \
-  || die "${GUEST_CFG} ist nicht von git getrackt — 'git add -A' ausfuehren. Ungetrackte Dateien sind fuer die Flake-Evaluation unsichtbar."
+# ---------------------------------------------------------------------------
+# 0b) Tastaturlayout aufloesen und hosts/browser-vm/keyboard.nix schreiben
+# ---------------------------------------------------------------------------
+# Warum eine eigene Datei statt eines Eintrags in der browser-vm.xml: das Layout ist
+# KEIN libvirt-Parameter, sondern Teil des gebauten Images — es kann dort nicht "kleben".
+# Die Gast-Config liest diese Datei ueber builtins.pathExists und faellt sonst auf
+# DEF_KBD_LAYOUT zurueck. Muster: ssh-debug.pub (Geraetezustand, bewusst KEIN Payload).
+# (Die Validierung von --kbd steht bewusst weiter oben bei den cpu/ram-Checks — vor der
+#  ersten schreibenden Aktion; hier wird nur noch aufgeloest und geschrieben.)
+
+# "Kleben": vorhandene keyboard.nix lesen (ein Flag schlaegt sie). Bewusst per sed statt
+# per Nix-Eval — das Format schreibt dieses Skript selbst, ein nix-Aufruf waere hier
+# unnoetiger Ballast (und im Bootstrap-Pfad nicht garantiert verfuegbar).
+kbd_file_layout() {
+  [ -f "$KBD_FILE_REL" ] || return 0
+  sed -n 's/^[[:space:]]*layout[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$KBD_FILE_REL" | head -n1
+}
+CUR_KBD="$(kbd_file_layout)"
+KBD_LAYOUT="${OPT_KBD:-${CUR_KBD:-$DEF_KBD_LAYOUT}}"
+
+# Umschalttaste nur bei MEHREREN Gruppen. grp:alt_shift_toggle ist bewusst dieselbe
+# Kombination wie auf dem Host (modules/desktop.nix): SPICE reicht Scancodes durch, also
+# schalten Host und Gast gemeinsam um — genau das ist beim Tippen auf einer physisch
+# anderen Tastatur gewollt. Bei EINER Gruppe bleibt options leer (nichts umzuschalten).
+case "$KBD_LAYOUT" in
+  *,*) KBD_OPTIONS="grp:alt_shift_toggle" ;;
+  *)   KBD_OPTIONS="" ;;
+esac
+
+write_kbd_nix() {
+  mkdir -p "$(dirname "$KBD_FILE_REL")"
+  cat > "$KBD_FILE_REL" <<EOF
+# hosts/browser-vm/keyboard.nix — AUTO-GENERIERT von deploy-browser-vm.sh (--kbd).
+# Nicht von Hand editieren; der naechste Deploy ueberschreibt die Datei.
+# Geraetezustand, KEIN Payload (nicht in payload-vm.list) — steht aber im Git, sonst
+# sieht der Flake-Build sie nicht und baut still mit dem Default "${DEF_KBD_LAYOUT}".
+{
+  layout  = "${KBD_LAYOUT}";
+  options = "${KBD_OPTIONS}";
+}
+EOF
+}
+# Datei nur anlegen, wenn ein Flag sie verlangt oder sie schon existiert (dann neu
+# schreiben = idempotent). Im reinen Default-Betrieb bleibt der Host-Ordner unberuehrt.
+if [ -n "$OPT_KBD" ] || [ -f "$KBD_FILE_REL" ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "(dry-run) Wuerde ${KBD_FILE_REL} mit layout='${KBD_LAYOUT}' schreiben und tracken."
+  else
+    write_kbd_nix
+    # git add MUSS hier passieren: der Flake-Build sieht nur GETRACKTE Dateien. Eine
+    # untrackte keyboard.nix wuerde still ignoriert -> Image mit Default, ohne Fehler.
+    git add "$KBD_FILE_REL" >/dev/null 2>&1 || warn "git add ${KBD_FILE_REL} fehlgeschlagen — der Build ignoriert die Datei dann still!"
+    ok "Tastatur: ${KBD_LAYOUT}${KBD_OPTIONS:+ (${KBD_OPTIONS})} — ${KBD_FILE_REL} geschrieben."
+  fi
+else
+  info "Tastatur: ${KBD_LAYOUT} (Produkt-Default; abweichend setzen mit --kbd, z.B. --kbd de,gb)."
+fi
+
+# Flake-Output vorhanden? (auf einem frischen Host evtl. noch nicht angelegt)
+if ! grep -qF 'browser-vm' flake.nix; then
+  warn "In flake.nix fehlt der 'browser-vm'-Output. Ergaenze unter outputs … nixosConfigurations:"
+  cat <<'SNIP'
+      nixosConfigurations.browser-vm = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [ ./hosts/browser-vm/configuration.nix ];
+      };
+SNIP
+fi
 
 # ---------------------------------------------------------------------------
 # 1) Eigenes browser-VM-Netz (NAT) mit fester DHCP-Reservierung sicherstellen
@@ -400,7 +477,11 @@ fi
 if [ "$DRY_RUN" -eq 1 ]; then
   info "(dry-run) Wuerde zum Abschluss den Stand-Marker ${MARKER_FILE} schreiben."
 else
-  cat flake.lock "hosts/${VM_NAME}/configuration.nix" | sha256sum | cut -d' ' -f1 \
+  # keyboard.nix geht MIT ein, wenn sie existiert — sonst bliebe ein reiner
+  # Layout-Wechsel fuer update-all.sh unsichtbar und die VM nie faellig.
+  marker_inputs=( flake.lock "hosts/${VM_NAME}/configuration.nix" )
+  if [ -f "$KBD_FILE_REL" ]; then marker_inputs+=( "$KBD_FILE_REL" ); fi
+  cat "${marker_inputs[@]}" | sha256sum | cut -d' ' -f1 \
     | sudo tee "$MARKER_FILE" >/dev/null
   sudo chmod 0644 "$MARKER_FILE"
   ok "Stand-Marker geschrieben: ${MARKER_FILE}"

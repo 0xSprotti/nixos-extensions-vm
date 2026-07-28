@@ -10,6 +10,10 @@
 #   - Rabby: gepinnte, hash-verifizierte GitHub-Release fest ins Image (--load-extension) ->
 #     bei jedem frischen Boot da, KEINE Auto-Updates; nur das Keystone-Koppeln (QR)
 #     bleibt pro Session. Keys liegen NIE in der VM (air-gapped Keystone).
+#   - Tastatur: Default "de". SPICE reicht SCANCODES durch, kein Zeichenstrom — der Gast
+#     mappt sie mit SEINEM Layout. Ohne diese Einstellung greift der nixpkgs-Default "us"
+#     (die Gast-Config importiert modules/desktop.nix bewusst NICHT). Abweichung ueber
+#     hosts/browser-vm/keyboard.nix, geschrieben von deploy-browser-vm.sh --kbd.
 #   - Semantik: Brave schliessen = VM faehrt herunter (Wegwerf-Session zu Ende).
 { config, lib, pkgs, modulesPath, ... }:
 let
@@ -39,6 +43,23 @@ let
     [ -n "$manifest" ] || { echo "manifest.json nicht im Zip gefunden"; exit 1; }
     cp -r "$(dirname "$manifest")" $out
   '';
+
+  # ===== Tastaturlayout: Produkt-Default + optionale Abweichung =====
+  # Das Layout ist Teil des GEBAUTEN Images und kann deshalb — anders als CPU/RAM —
+  # nicht in der browser-vm.xml "kleben". Traeger einer Abweichung ist stattdessen
+  # hosts/browser-vm/keyboard.nix, erzeugt von deploy-browser-vm.sh --kbd:
+  #     { layout = "de,gb"; options = "grp:alt_shift_toggle"; }
+  # Fehlt die Datei, gilt der Produkt-Default unten. Gleiches Muster wie ssh-debug.pub:
+  # Geraete-/Personenzustand im eigenen Repo, bewusst KEIN Payload.
+  #
+  # FALLE (identisch zu ssh-debug.pub): der Flake-Build sieht nur GETRACKTE Dateien.
+  # Eine vorhandene, aber untrackte keyboard.nix wird STILL ignoriert und das Image
+  # mit dem Default gebaut. deploy-browser-vm.sh macht das 'git add' deshalb selbst.
+  kbd = if builtins.pathExists ./keyboard.nix then import ./keyboard.nix else { };
+  # 'or' faengt eine unvollstaendig geschriebene Datei ab (z.B. layout ohne options).
+  # DEFAULT-SPIEGEL: "de" muss mit DEF_KBD_LAYOUT in deploy-browser-vm.sh uebereinstimmen.
+  kbdLayout  = kbd.layout  or "de";
+  kbdOptions = kbd.options or "";
 in
 {
   # virtio-Treiber ins initrd — sonst sieht der Gast-Kernel die Platte nicht (Emergency-Mode).
@@ -123,6 +144,26 @@ in
     enable = true;
     user = "browse";
   };
+
+  # ===== Tastaturlayout (Werte s. let-Block oben) =====
+  # Ohne diese Zeilen greift der nixpkgs-Default "us" — auf einer de-Tastatur waeren dann
+  # y/z vertauscht, die Umlaute weg und '-'/'/' verschoben. Fuer eine VM, in der
+  # Passphrasen und Wallet-Adressen getippt werden, ist das ein Fehlerpfad, kein Komfort.
+  # Bei MEHREREN Gruppen (z.B. "de,gb") setzt deploy-browser-vm.sh grp:alt_shift_toggle —
+  # dieselbe Kombination wie auf dem Host (modules/desktop.nix). SPICE reicht Scancodes
+  # durch, also schalten Host und Gast gemeinsam um; genau das ist beim Tippen auf einer
+  # physisch anderen Tastatur gewollt.
+  # ACHTUNG: die aktive Gruppe ist reiner X-Laufzeitzustand. Jede Session startet auf der
+  # ERSTEN Gruppe, und Openbox hat keinen Layout-Indikator — Umschalten erfolgt blind.
+  services.xserver.xkb = {
+    layout  = kbdLayout;
+    options = kbdOptions;
+  };
+  # VT-Keymap aus demselben Layout ableiten (bei mehreren Gruppen: die erste). Betrifft nur
+  # tty1 an der virtio-Grafik, also praktisch nur den Fall, dass X gar nicht hochkommt.
+  # 'virsh console' ist eine SERIELLE Konsole und uebertraegt Zeichen statt Scancodes —
+  # dort wirkt weder diese Option noch das xkb-Layout.
+  console.useXkbConfig = true;
 
   # Session-Startprogramme DETERMINISTISCH ueber den NixOS-eigenen Mechanismus: sessionCommands
   # laeuft im xsession-Wrapper (DISPLAY + PATH gesetzt), bevor Openbox startet. BEWUSST NICHT

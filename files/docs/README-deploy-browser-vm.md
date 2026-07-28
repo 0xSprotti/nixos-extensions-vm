@@ -10,6 +10,7 @@ allen Hosts identisch, ohne Hardware-Bezug.
 ```bash
 bash deploy-browser-vm.sh                     # Standard-Deploy
 bash deploy-browser-vm.sh --cpu 6 --ram 8192  # Ressourcen setzen („kleben" für künftige Deploys)
+bash deploy-browser-vm.sh --kbd de,gb         # Tastatur setzen (klebt ebenfalls)
 bash deploy-browser-vm.sh --autostart         # VM künftig beim Host-Boot mitstarten
 bash deploy-browser-vm.sh --no-start          # deployen, aber nicht starten (Update-Pfad, s. u.)
 bash deploy-browser-vm.sh --dry-run           # nur zeigen, nichts verändern (ruft kein sudo)
@@ -17,8 +18,17 @@ bash deploy-browser-vm.sh --dry-run           # nur zeigen, nichts verändern (r
 
 - **Kleben:** `--cpu`/`--ram` landen in der erzeugten `browser-vm.xml` und werden beim nächsten
   Deploy von dort übernommen — einmal gesetzt bleibt gesetzt; ein neues Flag schlägt den alten
-  Wert. Defaults (nur wenn nichts vorliegt): 4 vCPU, **6144 MiB** — Brave, Software-Video-Decode
+  Wert. `--kbd` klebt genauso, aber über einen **anderen Träger**: nicht die XML, sondern
+  `hosts/browser-vm/keyboard.nix` (Begründung unter „Tastaturlayout"). Defaults (nur wenn
+  nichts vorliegt): 4 vCPU, **6144 MiB** — Brave, Software-Video-Decode
   und das tmpfs-Home teilen sich den RAM.
+- **`--kbd LAYOUT`:** xkb-Layout des Gasts, **Default `de`**. Ohne diese Einstellung greift der
+  nixpkgs-Default `us` — SPICE reicht *Scancodes* durch, kein Zeichenstrom, der Gast mappt sie
+  also mit **seinem** Layout. Auf einer de-Tastatur wären dann y/z vertauscht, die Umlaute weg
+  und `-`/`/` verschoben; beim Tippen von Passphrasen und Wallet-Adressen ist das ein
+  Fehlerpfad, kein Komfortthema. Mehrere Layouts kommagetrennt (`--kbd de,gb`) — dann setzt das
+  Skript automatisch `grp:alt_shift_toggle`, also **Alt+Shift** zum Umschalten. Näheres unten
+  unter „Tastaturlayout".
 - **Kein `--disk`:** bewusst — es gibt kein Volume, das man vergrößern könnte (s. u.).
 - **Autostart ist per Default AUS** — das Desktop-Icon startet die VM on-demand; der Deploy setzt
   den Zustand jedes Mal **explizit**.
@@ -110,12 +120,8 @@ sudo virsh console browser-vm   # Debug-Konsole (raus: Strg-])
 ```
 
 Hinweise: Der Flake-Build sieht nur **getrackte** Dateien — Änderungen an browser-VM-Dateien
-vorher committen (das Skript warnt bei schmutzigem Arbeitsbaum). Seit der Auto-Discovery
-(Baustein A) braucht `flake.nix` **keinen** namentlichen `browser-vm`-Output mehr; das Skript prüft
-stattdessen die echte Vorbedingung und **bricht ab**, wenn `hosts/browser-vm/configuration.nix`
-fehlt oder nicht von git getrackt ist. Der zweite Fall ist hier besonders unangenehm: existiert
-eine ältere getrackte Fassung, baut Nix stillschweigend die — eine gerade erst gepinnte
-Rabby-Version wäre dann **nicht** im Image, obwohl der Deploy Erfolg meldet.
+vorher committen (das Skript warnt bei schmutzigem Arbeitsbaum). Auf einem Host ohne
+`browser-vm`-Output in der `flake.nix` zeigt das Skript den nötigen Schnipsel direkt an.
 
 
 ---
@@ -129,4 +135,62 @@ vergisst `git add` nicht — dann erlaubt die Gast-Config SSH mit genau diesem K
 löschen + neu deployen entfernt den Zugang wieder. Anders als bei der dev-VM wird hier
 **nie automatisch geseedet**: SSH in diese VM ist eine bewusste Einzelentscheidung.
 
-> Stand: 2026-07-23. Bei Abweichungen gilt das Skript selbst (Kopf-Kommentar).
+---
+
+## Tastaturlayout (`--kbd`, `hosts/browser-vm/keyboard.nix`)
+
+**Produkt-Default ist `de`.** Wer nichts angibt, bekommt eine deutsche Tastatur, ohne dass eine
+zusätzliche Datei entsteht.
+
+### Warum nicht in der `browser-vm.xml`?
+
+`--cpu` und `--ram` kleben in der Domain-XML, weil libvirt sie liest. Das Tastaturlayout ist
+dagegen **Teil des gebauten Images** — es wird beim Flake-Build in die X-Konfiguration
+eingebacken und taucht in der XML gar nicht auf. Träger einer Abweichung ist deshalb
+`hosts/browser-vm/keyboard.nix`:
+
+```nix
+{
+  layout  = "de,gb";
+  options = "grp:alt_shift_toggle";
+}
+```
+
+Die Gast-Config liest sie über `builtins.pathExists` und fällt sonst auf `de` zurück — dasselbe
+Muster wie `ssh-debug.pub`. Die Datei ist **Gerätezustand, kein Payload** (steht nicht in
+`payload-vm.list`): sie gehört ins eigene Repo und wird bei einem Payload-Transfer nie
+angefasst. Das Skript schreibt sie und macht das `git add` selbst — **muss** es sogar, denn der
+Flake-Build sieht nur getrackte Dateien und würde eine untrackte `keyboard.nix` stillschweigend
+ignorieren und das Image mit dem Default bauen.
+
+Der Stand-Marker bezieht `keyboard.nix` mit ein, sofern sie existiert. Ein reiner
+Layout-Wechsel macht die VM in `update-all.sh` also sichtbar fällig. Existiert die Datei nicht,
+ist die Marker-Formel bitgleich zur alten — bestehende Marker bleiben gültig.
+
+### Mehrere Layouts und die Umschaltung
+
+Bei kommagetrennten Werten (`--kbd de,gb`) setzt das Skript automatisch
+`grp:alt_shift_toggle` — **dieselbe** Kombination wie der Host in `modules/desktop.nix`. Weil
+SPICE Scancodes durchreicht, schalten Host und Gast dabei **gemeinsam** um: wer auf einer
+physisch englischen Tastatur tippt und am Host auf `gb` wechselt, hat den Wechsel auch in der
+VM. Bei einem Einzellayout bleibt `options` leer.
+
+Damit das aufgeht, müssen **Host und Gast dasselbe Set in derselben Reihenfolge** haben. Der
+Host steht auf `de,gb` — ein Gast mit `de,us` liefe dagegen.
+
+### Zwei Grenzen, die bleiben
+
+- **Kein Layout-Indikator.** Openbox hat keine Kontrollleiste; welche Gruppe aktiv ist, sieht
+  man nirgends. Der Test ist blind: `y` tippen und schauen, ob ein `z` erscheint.
+- **Jede Session startet auf der ersten Gruppe.** Die aktive Gruppe ist X-Laufzeitzustand und
+  fällt mit der Wegwerf-Session weg. Wer am Host zuletzt auf `gb` stand, öffnet die VM auf `de`
+  — ein Alt+Shift korrigiert es. Das ist der Preis der Wegwerf-Semantik und nicht lösbar, ohne
+  Zustand in die VM zu tragen.
+
+### Fehlermeldungen
+
+`en` und `uk` sind **keine** xkb-Layouts; das Skript bricht dort mit einem Hinweis ab, statt
+still auf `us` zurückzufallen. Gemeint ist `us` (US-QWERTY, `@` auf Shift+2) oder `gb`
+(UK-QWERTY, `@` auf Shift+`'`). Gleiches gilt für `ger`/`deu` gegenüber `de`.
+
+> Stand: 2026-07-28. Bei Abweichungen gilt das Skript selbst (Kopf-Kommentar).
