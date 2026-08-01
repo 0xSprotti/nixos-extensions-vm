@@ -13,7 +13,10 @@
 #                braechten null Gewinn (der Host sieht als NAT-Gateway ohnehin
 #                den gesamten VM-Verkehr) und kosteten doppelte DNS-Pflege.
 #   dev-vm     : Egress tcp 22 (git-SSH) + 443 (HTTPS: GitHub, cache.nixos.org,
-#                Claude). KEIN LAN — entschieden; Ausnahmen sind bewusste,
+#                Claude) + 5432/6543 (Postgres direkt bzw. Supabase-Pooler/
+#                Supavisor — Produkt-Default seit 2026-08-01: Datenbank-Zugriff
+#                aus der Entwicklungs-VM ist Kernaufgabe, kein Sonderfall).
+#                KEIN LAN — entschieden; Ausnahmen sind bewusste,
 #                dokumentierte Options-Overrides je Host (s. Optionen unten).
 #   Inter-VM   : verboten — explizite Regel VOR allen Ausnahme-Punkten, damit
 #                eine spaetere LAN-Ausnahme sie nie versehentlich aushebeln kann.
@@ -72,17 +75,20 @@ in
   options.hardening.vmNetIsolation = {
     enable = lib.mkEnableOption ''
       die nftables-VM-Netz-Isolierung: browser-vm nur Internet (80/443 + QUIC),
-      dev-vm nur 22/443, Inter-VM verboten, VM->Host nur DNS/DHCP zur Bridge-.1.
+      dev-vm nur 22/443/5432/6543, Inter-VM verboten, VM->Host nur DNS/DHCP zur Bridge-.1.
       Konservativer Default: aus — jeder Host schaltet bewusst an
     '';
 
     devVm.allowedTcpPorts = lib.mkOption {
       type = lib.types.listOf lib.types.port;
-      default = [ 22 443 ];
+      default = [ 22 443 5432 6543 ];
       description = ''
         TCP-Egress-Ports der dev-vm Richtung Internet (git-SSH + HTTPS decken
-        GitHub, cache.nixos.org und Claude ab). JEDE Erweiterung ist eine
-        dokumentierte Ausnahme: Override im Host-Ordner MIT Kommentar wozu
+        GitHub, cache.nixos.org und Claude ab; 5432/6543 = Postgres direkt bzw.
+        Supabase-Pooler/Supavisor — Produkt-Default seit 2026-08-01, weil
+        Datenbank-Zugriff aus der Entwicklungs-VM Kernaufgabe ist). JEDE
+        weitere Erweiterung ist eine dokumentierte Ausnahme: Override im
+        Host-Ordner MIT Kommentar wozu
         (Beispiel kubectl -> <cluster-api>: 6443 ergaenzen). LAN-Ziele bleiben
         davon unberuehrt gesperrt (RFC-1918-Drop greift vor den Port-Accepts).
       '';
